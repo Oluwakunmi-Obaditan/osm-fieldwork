@@ -24,11 +24,12 @@ import concurrent.futures
 import logging
 import queue
 import re
+import json #added Json for Decoding construct
 import sys
 import threading
 from pathlib import Path
 from typing import Union
-
+from io import BytesIO
 import geojson
 import mercantile
 from cpuinfo import get_cpu_info
@@ -125,7 +126,7 @@ class BaseMapper(object):
 
     def __init__(
         self,
-        boundary: str,
+        boundary: Union[BytesIO,str],
         base: str,
         source: str,
         xy: bool,
@@ -270,9 +271,9 @@ class BaseMapper(object):
             log.debug("%s doesn't exists" % filespec)
             return False
 
-    def makeBbox(
+    def  makeBbox(
         self,
-        boundary: str,
+        boundary: Union[BytesIO,str],
     ) -> tuple[float, float, float, float]:
         """Make a bounding box from a shapely geometry.
 
@@ -283,7 +284,31 @@ class BaseMapper(object):
         Returns:
             (list): The bounding box coordinates
         """
-        if not boundary.lower().endswith((".json", ".geojson")):
+        #checking if the boundary is an instance of BytesIO
+        if isinstance(boundary, BytesIO):
+            boundary_data = boundary.getvalue().decode()
+            boundary_data = json.loads(boundary_data)
+            log.info("Result from BytesIO", boundary_data)
+            if "features" in boundary_data:
+                log.info("Found Data to Shape")
+                geometry = shape(boundary_data["features"][0]["geometry"])
+            elif "geometry" in boundary_data:
+                log.info("Found Data to Shape")
+                geometry = shape(boundary_data["geometry"])
+            else:
+                log.info("Found Data to Shape")
+                geometry = shape(boundary_data)
+            if isinstance(geometry, list):
+                # Multiple geometries
+                log.debug("Creating union of multiple bbox geoms")
+                geometry = unary_union(geometry)
+            if geometry.is_empty:
+                msg = f"No bbox extracted from {geometry}"
+                log.error(msg)
+                raise ValueError(msg) from None
+            log.debug("Message Received is:" f"{geometry.bounds}")
+
+        elif not boundary.lower().endswith((".json", ".geojson")):
             # Is BBOX string
             try:
                 if "," in boundary:
@@ -303,27 +328,32 @@ class BaseMapper(object):
                 msg = f"Failed to parse BBOX string: {boundary}"
                 log.error(msg)
                 raise ValueError(msg) from None
+            
+        else: 
+            err = "The boundary Specified is not Valid"
+            log.error(err)
+            raise ValueError(err)
 
-        log.debug(f"Reading geojson file: {boundary}")
-        with open(boundary, "r") as f:
-            poly = geojson.load(f)
-        if "features" in poly:
-            geometry = shape(poly["features"][0]["geometry"])
-        elif "geometry" in poly:
-            geometry = shape(poly["geometry"])
-        else:
-            geometry = shape(poly)
+            
+        # log.debug(f"Reading geojson file: {boundary}")
+        # with open(boundary, "r") as f:
+        #     poly = geojson.load(f)
+        # if "features" in poly:
+        #     geometry = shape(poly["features"][0]["geometry"])
+        # elif "geometry" in poly:
+        #     geometry = shape(poly["geometry"])
+        # else:
+        #     geometry = shape(poly)
 
-        if isinstance(geometry, list):
-            # Multiple geometries
-            log.debug("Creating union of multiple bbox geoms")
-            geometry = unary_union(geometry)
+        # if isinstance(geometry, list):
+        #     # Multiple geometries
+        #     log.debug("Creating union of multiple bbox geoms")
+        #     geometry = unary_union(geometry)
 
-        if geometry.is_empty:
-            msg = f"No bbox extracted from {geometry}"
-            log.error(msg)
-            raise ValueError(msg) from None
-
+        # if geometry.is_empty:
+        #     msg = f"No bbox extracted from {geometry}"
+        #     log.error(msg)
+        #     raise ValueError(msg) from None
         bbox = geometry.bounds
         # left, bottom, right, top
         # minX, minY, maxX, maxY
@@ -408,7 +438,7 @@ def tile_dir_to_pmtiles(outfile: str, tile_dir: str, bbox: tuple, attribution: s
 
 def create_basemap_file(
     verbose=False,
-    boundary=None,
+    boundary=Union[BytesIO, str],
     tms=None,
     xy=False,
     outfile=None,
@@ -434,6 +464,8 @@ def create_basemap_file(
     Returns:
         None
     """
+    
+    
     # if verbose, dump to the terminal.
     if verbose is not None:
         log.setLevel(logging.DEBUG)
@@ -459,7 +491,7 @@ def create_basemap_file(
         err = "You need to specify a boundary! (file or bbox)"
         log.error(err)
         raise ValueError(err)
-
+        
     # Get all the zoom levels we want
     zoom_levels = list()
     if zooms:
@@ -576,7 +608,10 @@ def main():
             log.error("")
             parser.print_help()
             quit()
-        boundary_parsed = args.boundary[0]
+        with open( args.boundary[0],"rb") as geojson_file:
+            boundary = geojson_file.read()
+            log.debug(f"Reading geojson file: {boundary}")
+            boundary_parsed = BytesIO(boundary)
     elif len(args.boundary) == 4:
         boundary_parsed = ",".join(args.boundary)
     else:
