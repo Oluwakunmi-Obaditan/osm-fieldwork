@@ -22,6 +22,7 @@
 import logging
 import os
 import shutil
+from io import BytesIO
 
 from osm_fieldwork.basemapper import BaseMapper
 from osm_fieldwork.sqlite import DataFile
@@ -32,6 +33,11 @@ rootdir = os.path.dirname(os.path.abspath(__file__))
 boundary = f"{rootdir}/testdata/Rollinsville.geojson"
 outfile = f"{rootdir}/testdata/rollinsville.mbtiles"
 base = "./tiles"
+
+with open(boundary,"rb") as geofile:
+    boundary= BytesIO(geofile.read())
+
+
 # boundary = open(infile, "r")
 # poly = geojson.load(boundary)
 # if "features" in poly:
@@ -66,5 +72,23 @@ def test_create():
     assert hits == 2
 
 
+def test_usingEsri():
+    # creating a base image using esri as the source
+    basemap = BaseMapper(boundary, base, "esri", False)
+    tiles = list()
+    for level in [12, 13, 14, 15, 16,17]: #getting zoom level from 12-17
+        basemap.getTiles(level)
+        tiles += basemap.tiles
+
+    # Inserting data content into the database
+    outf = DataFile(outfile, basemap.getFormat()) 
+    outf.writeTiles(tiles, base) # writing out datafile in sqlite database file.
+
+    os.remove(outfile)
+    shutil.rmtree(base)
+
+
 if __name__ == "__main__":
-    test_create()
+    test_usingEsri()
+
+
